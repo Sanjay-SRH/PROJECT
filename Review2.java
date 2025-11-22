@@ -8,34 +8,31 @@ import java.util.Scanner;
 import java.util.StringTokenizer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-public class Review2 {
-    private static int review_id = 1;
+public class Review {
+    private static int nextReviewIndex = 1;
     private static final String ARCHIVE_FILE = "reviews_archive.json"; 
 
     private String request_id;
     private String rating;
     private String review;
-    boolean taken_review = false;
+    private boolean taken = false; 
 
-    Review2() {
+    Review() {
         this.rating = "0";
         this.request_id = " ";
         this.review = " ";
-        this.taken_review = false;
-        review_id++;
+        this.taken = false;
     }
 
-    Review2(String request_id, String rating, String review) {
+    
+    Review(String request_id, String rating, String review, boolean taken) {
         this.request_id = request_id;
         this.rating = rating;
         this.review = review;
-        this.taken_review = true; 
-        review_id++;
-    }
-
-    public static int getreview_id() {
-        return review_id;
+        this.taken = taken;
     }
 
     // --- Getters and Setters ---
@@ -45,48 +42,32 @@ public class Review2 {
     public void setReview(String review) { this.review = review; }
     public String getrating() { return this.rating; }
     public void setrating(String rating) { this.rating = rating; }
-    public void settakenreview() { this.taken_review = true; }
+    public void settaken() { this.taken = true; }
     public void display() {
         System.out.println("Request ID: " + this.getReq_id() + ", Rating: " + this.getrating() + ", Review: " + this.getReview());
     }
-    // ------------------------------------------------------------------
 
-
-    // --- Core I/O Methods for Single File (JSON Array) ---
-    
-    /**
-     * Helper function to extract a string value corresponding to a key in a JSON object string.
-     * @param jsonStr The single JSON object string.
-     * @param key The key to look for (e.g., "request_id").
-     * @return The extracted value, or an empty string if not found.
-     */
     private static String extractJsonValue(String jsonStr, String key) {
-        String searchKey = "\"" + key + "\":\"";
-        int start = jsonStr.indexOf(searchKey);
-        
-        if (start == -1) {
-            return "";
+       
+        Pattern stringPattern = Pattern.compile("\"" + Pattern.quote(key) + "\":\"([^\"]*)\"");
+        Matcher stringMatcher = stringPattern.matcher(jsonStr);
+        if (stringMatcher.find()) {
+            return stringMatcher.group(1);
         }
-        start += searchKey.length();
-        
-        int end = jsonStr.indexOf("\"", start);
-        
-        if (end == -1) {
-            return "";
+        Pattern literalPattern = Pattern.compile("\"" + Pattern.quote(key) + "\":(\\w+)");
+        Matcher literalMatcher = literalPattern.matcher(jsonStr);
+        if (literalMatcher.find()) {
+            return literalMatcher.group(1);
         }
         
-        return jsonStr.substring(start, end);
+        return "";
     }
-
-    /**
-     * Reads all existing review data from the single archive file.
-     * @return A list of Review2 objects parsed from the file, or an empty list if file not found or empty.
-     */
-    private static List<Review2> readAllReviewsFromArchive() {
-        List<Review2> reviews = new ArrayList<>();
+    private static List<Review> readAllReviewsFromArchive() {
+        List<Review> reviews = new ArrayList<>();
         File file = new File(ARCHIVE_FILE);
-        
+        int maxReviewNum = 0;
         if (!file.exists() || file.length() == 0) {
+            nextReviewIndex = 1;
             return reviews; 
         }
 
@@ -97,7 +78,7 @@ public class Review2 {
             if (content.startsWith("[") && content.endsWith("]")) {
                 content = content.substring(1, content.length() - 1).trim();
             }
-            String[] reviewStrings = content.split("\\}, \\{");
+            String[] reviewStrings = content.split("(?<=})\\s*,\\s*(?=\\{)");
             
             for (String reviewStr : reviewStrings) {
                 String fullReviewStr = reviewStr.trim();
@@ -107,48 +88,67 @@ public class Review2 {
                 if (!fullReviewStr.endsWith("}")) {
                     fullReviewStr = fullReviewStr + "}";
                 }
+                
                 try {
                     String request_id = extractJsonValue(fullReviewStr, "request_id");
                     String rating = extractJsonValue(fullReviewStr, "rating");
                     String review = extractJsonValue(fullReviewStr, "review");
+                    String takenStr = extractJsonValue(fullReviewStr, "taken");
+                    boolean taken = Boolean.parseBoolean(takenStr);
                     
                     if (!request_id.isEmpty() && !rating.isEmpty()) {
-                        reviews.add(new Review2(request_id, rating, review));
+                        reviews.add(new Review(request_id, rating, review, taken));
+                        
+                        if (request_id.startsWith("REQ")) {
+                            try {
+                                int currentNum = Integer.parseInt(request_id.substring(3));
+                                if (currentNum > maxReviewNum) {
+                                    maxReviewNum = currentNum;
+                                }
+                            } catch (NumberFormatException ignored) {
+                            }
+                        }
                     }
-                } catch (StringIndexOutOfBoundsException e) {
-                    System.err.println("Warning: Corrupt review data found in file. Skipping entry.");
+                } catch (Exception e) {
+                    System.err.println("Warning: Corrupt review data found in file. Skipping entry. Error: " + e.getMessage());
                 }
             }
+            nextReviewIndex = maxReviewNum + 1;
+
         } catch (IOException e) {
             System.err.println("Error reading archive file: " + e.getMessage());
         }
         return reviews;
     }
     public boolean writeReviewToSingleFile() {
-       
-        List<Review2> reviews = readAllReviewsFromArchive();
-
-        reviews.add(new Review2(this.request_id, this.rating, this.review));
- 
+        List<Review> reviews = readAllReviewsFromArchive();
+        reviews.add(new Review(this.request_id, this.rating, this.review, true));
+        this.settaken();
         StringBuilder jsonBuilder = new StringBuilder();
-        jsonBuilder.append("[");
-        
+        jsonBuilder.append("[\n"); 
         for (int i = 0; i < reviews.size(); i++) {
-            Review2 r = reviews.get(i);
-            String reviewJson = String.format(
-                "{\"request_id\":\"%s\",\"rating\":\"%s\",\"review\":\"%s\",\"taken\":true}",
-                r.request_id, r.rating, r.review.replaceAll("\"", "\\\"") 
-            );
-            jsonBuilder.append(reviewJson);
+            Review r = reviews.get(i);
+            String safeReview = r.review.replaceAll("\"", "\\\""); 
             
+            // Start object (indented by 4 spaces)
+            jsonBuilder.append("    {\n");
+            jsonBuilder.append(String.format("        \"request_id\":\"%s\",\n", r.request_id));
+
+            jsonBuilder.append(String.format("        \"rating\":\"%s\",\n", r.rating));
+            
+            jsonBuilder.append(String.format("        \"review\":\"%s\",\n", safeReview));
+            jsonBuilder.append(String.format("        \"taken\":%s\n", r.taken));
+            jsonBuilder.append("    }");
+
             if (i < reviews.size() - 1) {
-                jsonBuilder.append(", "); 
+                jsonBuilder.append(",\n"); 
+            } else {
+                jsonBuilder.append("\n"); 
             }
         }
-        jsonBuilder.append("]");
+        jsonBuilder.append("]"); 
         try (FileWriter writer = new FileWriter(ARCHIVE_FILE)) {
             writer.write(jsonBuilder.toString());
-            this.settakenreview();
             System.out.println("\nReview successfully written and archived in " + ARCHIVE_FILE);
             return true;
         } catch (IOException e) {
@@ -156,18 +156,19 @@ public class Review2 {
             return false;
         }
     }
+    
     public static void viewAllReviews() {
         System.out.println("\n==================================");
-        System.out.println("       SAVED CUSTOMER REVIEWS      ");
+        System.out.println("         SAVED CUSTOMER REVIEWS      ");
         System.out.println("==================================");
 
-        List<Review2> reviews = readAllReviewsFromArchive();
+        List<Review> reviews = readAllReviewsFromArchive();
         
         if (reviews.isEmpty()) {
             System.out.println("No reviews found in the archive.");
         } else {
             int index = 1;
-            for (Review2 r : reviews) {
+            for (Review r : reviews) {
                 System.out.print("Review #" + index + ": ");
                 r.display();
                 index++;
@@ -179,6 +180,7 @@ public class Review2 {
     public static void main(String[] args) {
         Scanner sc = new Scanner(System.in);
         String input;
+        readAllReviewsFromArchive(); 
 
         do {
             System.out.println("\n----------------------------------");
@@ -192,9 +194,8 @@ public class Review2 {
             input = sc.nextLine().trim();
 
             if (input.equals("1")) {
-                Review2 r = new Review2();
-                int nextReviewId = readAllReviewsFromArchive().size() + 1;
-                r.setReq_id("REQ" + nextReviewId); 
+                Review r = new Review();
+                r.setReq_id("REQ" + nextReviewIndex); 
 
                 System.out.println("\n--- Submitting a new Review for " + r.getReq_id() + " ---");
                 System.out.println("Enter <rating> <review text> (e.g., 5 Great_service!): ");
@@ -215,7 +216,10 @@ public class Review2 {
                         }
                         r.setrating(ratingInput);
                         r.setReview(reviewText.toString().trim());
-                        r.writeReviewToSingleFile();
+                        
+                        if (r.writeReviewToSingleFile()) {
+                             nextReviewIndex++; 
+                        }
                         r.display();
 
                     } catch (NumberFormatException e) {
